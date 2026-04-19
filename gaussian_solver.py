@@ -217,3 +217,122 @@ def forward_elimination(matrix: np.ndarray) -> Tuple[np.ndarray, int]:
     rank += 1
 
   return matrix, rank
+
+def back_substitution(ref_matrix: np.ndarray, rank: int) -> Optional[np.ndarray]:
+  """
+  Extract solution from Row Echelon Form via back-substitution.
+
+  Handles all three outcome patterns:
+    1. Inconsistent: raises ValueError (contradiction row found)
+    2. Underdetermined: returns None (rank < n_vars)
+    3. Unique: returns solution vector x (full rank)
+
+  Args:
+    ref_matrix: Augumented matrix in REF form, shape (m, n+1)
+    rank:       Number of non-zero rows (= rank(A))
+
+  Returns:
+    np.ndarray (solution x) if unique, or None if infinite solutions.
+
+  Raises:
+    ValueError: If susyem is inconsistent (no solution exists).
+  
+  """
+  m, n_aug = ref_matrix.shape
+  n_vars = n_aug - 1  # number of variables (exclude augmented column)
+
+  # -- Pattern 1: Check for contradiction rows ----
+  # Any row below index rank has all zeros in variable columns.
+  # If the augmented entry is non-zero -> contradiction -> no solution.
+  for i in range(rank, m):
+    if abs(ref_matrix[i, -1]) > 1e-10:
+      raise ValueError(
+        f"Inconsistent system (no solution). "
+        f"Contradiction in row {i}: o = {ref_matrix[i, -1]:.4f}"
+      )
+    
+  # -- Pattern 2: Check for underdetermination ----
+  # Fewer pivots than variables -> free variables -> infinite solutions.
+  if rank < n_vars:
+    return None   # Caller sets result['type'] = 'infinite'
+  
+  # -- Pattern 3: Unique solution - run back-substitution ----
+  x = np.zeros(n_vars)
+
+  # Traverse rows from bottom of pivot region to top
+  for i in range(rank -1, -1, -1):
+    # Find the pivot column for this row
+    pivot_col = None
+    for j in range(n_vars):
+      if abs(ref_matrix[i, j]) > 1e-10:
+        pivot_col = j
+        break
+    
+    if pivot_col is None:
+      continue    # Zero row - skip (already handled above)
+    rhs = ref_matrix[i, -1]
+
+    # Subtract the contribution of all already-solved variables
+    for j in range(pivot_col + 1, n_vars):
+      rhs -= ref_matrix[i, j] * x[j]
+
+    # Solve for the pivot variable
+    x[pivot_col] = rhs / ref_matrix[i, pivot_col]
+
+  return x
+
+def gaussian_solve(A: np.ndarray, b: np.ndarray) -> dict:
+  """
+  Solve linear system Ax = b using Gaussian elimination from scratch.
+
+  This is the complete solver: builds augmented matrix, runs forward elimination to REF, then back-substition to extract solution.
+
+  Args:
+    A: Coefficient matrix (m x n), any shape
+    b: Right-hand side vector (m,) or (m, 1)
+
+  Returns:
+    dict with keys:
+      "solution": np.ndarray or None
+      "type":     "unique" | "infinite" | "none"
+      "rank":     int - number of linearly independent rows
+      "ref":      np.ndarray - Row Echelon Form of [A|b]
+
+  Examples:
+    >>> A = np.array([[2, 1], [1, 2]], dtype=float)
+    >>> b = np.array([5, 4], dtype=float)
+    >>> result = gaussian_solve(A, b)
+    >>> result["type"]
+    "unique"
+    >>> result["solution"]
+    array([2., 1.])
+  
+  """
+  # Defensive: ensure float type, flatten b
+  A = np.asarray(A, dtype=float)
+  b = np.asarray(b, dtype=float).flatten()
+
+  # Build augmented matrix [A | b]
+  augmented = np.hstack([A, b.reshape(-1, 1)])
+
+  # Forward elimination -> Row Echelon Form
+  ref, rank = forward_elimination(augmented.copy())
+  # ^^^^.copy() protects original A
+
+  # Initialise result with what we already know
+  result = {"rank": rank, "ref": ref}
+
+  # Back-substitution -> solution, None, or ValueError
+  try:
+    solution = back_substitution(ref, rank)
+    if solution is None:
+      result["type"] = "infinite"
+      result["solution"] = None
+    else:
+      result["type"] = "unique"
+      result["solution"] = solution
+  except ValueError:
+    result["type"] = "none"
+    result["solution"] = None
+  return result
+
